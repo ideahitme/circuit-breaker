@@ -1,6 +1,6 @@
 ## Circuit breaker 
 
-Thread-safe circuit breaker implementation in Go
+Thread-safe circuit breaker implementation in Go to safe-guard your services and make ur infrastructure more resilient
 
 *See more in https://docs.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker*
 
@@ -30,7 +30,8 @@ WithCounterResetPeriod(x time.Duration) // interval after which consecutive requ
 WithLogger(Logger) // allows to enable logging, see circuitbreaker.Logger interface and example below (default no logging)
 ```
 
-Invocation: 
+Invocation, i.e. guarding happens through wrapping the call with `cb.Exec(circuitbreaker.RequestFunc)`, for example: 
+
 ```go
 	resp, err := cb.Exec(HTTPGetter("https://www.google.com"))
 	if err != nil {
@@ -110,6 +111,8 @@ func RandFunc() (interface{}, error) {
 ### To be implemented: 
 
 - [ ] Write tests
+- [ ] Improve logging
+- [ ] Allow user to enable http (or maybe other protocols) status code analysis (see below why)
 - [ ] Be aware of the errors, for example if HTTP code indicates that service is overloaded, we should not wait for threshold but immediately switch to open state
 - [ ] Adjust timeouts, for example timeout for service crash can be auto-adjusted as specified by the user
 - [ ] Allow to dynamically reconfigure circuit breaker, i.e. change the default threshold or timeouts based on the returned error
