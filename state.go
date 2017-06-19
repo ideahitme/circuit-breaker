@@ -82,5 +82,5 @@ func (s *State) Reset() {
 	defer s.Unlock()
 
 	s.status = StatusClosed
-	s.lastOpen = time.Now().Add(-24 * time.Hour)
+	s.lastOpen = time.Time{}
 }

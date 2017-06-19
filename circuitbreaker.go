@@ -75,8 +75,8 @@ func (c *Counter) Success() uint32 {
 func (c *Counter) Reset() {
 	c.Lock()
 	c.Unlock()
-	c.lastFail = time.Now().Add(-24 * time.Hour)
-	c.lastSuccess = time.Now().Add(-24 * time.Hour)
+	c.lastFail = time.Time{}
+	c.lastSuccess = time.Time{}
 	c.failure = 0
 	c.success = 0
 }
