@@ -63,13 +63,12 @@ func (s *State) Status() Status {
 }
 
 // Set updates the status of the state
-// setter is probably not needed TODO: fix this later
 // additionally handles updating the flag indicating when circuitbreaker
-// last entered Open state
+// last entered open state
 func (s *State) Set(status Status) {
 	s.Lock()
 	defer s.Unlock()
-
+	// update lastOpen field
 	if status == StatusOpen {
 		s.lastOpen = time.Now()
 	}
@@ -79,6 +78,9 @@ func (s *State) Set(status Status) {
 
 // Reset resets all flags
 func (s *State) Reset() {
+	s.Lock()
+	defer s.Unlock()
+
 	s.status = StatusClosed
 	s.lastOpen = time.Now().Add(-24 * time.Hour)
 }

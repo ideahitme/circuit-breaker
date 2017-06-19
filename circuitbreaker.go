@@ -6,6 +6,7 @@ package circuitbreaker
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,7 @@ var (
 	defaultCounterResetPeriod = 1 * time.Minute
 
 	ErrRequestDisabled = fmt.Errorf("requests are temporarily disabled by the circuit breaker")
+	ErrBlocked         = fmt.Errorf("circuit breaker is blocking all requests. Call Unblock() to unblock it")
 )
 
 type (
@@ -33,6 +35,7 @@ type (
 		lastFail    time.Time
 		lastSuccess time.Time
 		resetPeriod time.Duration
+		sync.Mutex
 	}
 )
 
@@ -41,11 +44,14 @@ type (
 // counter for failure should be set to 1
 // as a correctness measure for rarely used services
 func (c *Counter) Fail() uint32 {
+	c.Lock()
+	defer c.Unlock()
 	if time.Since(c.lastFail) > c.resetPeriod {
 		c.failure = 0
 	}
 	c.lastFail = time.Now()
 	c.failure++
+	c.success = 0
 	return c.failure
 }
 
@@ -54,34 +60,43 @@ func (c *Counter) Fail() uint32 {
 // counter for success should be set to 1
 // as a correctness measure for rarely used services
 func (c *Counter) Success() uint32 {
+	c.Lock()
+	defer c.Unlock()
 	if time.Since(c.lastSuccess) > c.resetPeriod {
 		c.success = 0
 	}
 	c.lastSuccess = time.Now()
 	c.success++
+	c.failure = 0
 	return c.success
 }
 
 // Reset resets all stats
 func (c *Counter) Reset() {
+	c.Lock()
+	c.Unlock()
 	c.lastFail = time.Now().Add(-24 * time.Hour)
 	c.lastSuccess = time.Now().Add(-24 * time.Hour)
 	c.failure = 0
 	c.success = 0
 }
 
-// CircuitBreaker implements circuit breaker :D
+// CircuitBreaker implements circuit breaker
 type CircuitBreaker struct {
+	service          string
 	counter          *Counter
 	state            *State
 	logger           Logger
+	blocked          bool
 	failureThreshold uint32
 	successThreshold uint32
+	sync.Mutex
 }
 
 // New initializes default circuit breaker
-func New(settings ...Option) *CircuitBreaker {
+func New(service string, settings ...Option) *CircuitBreaker {
 	cb := &CircuitBreaker{
+		service:          service,
 		counter:          &Counter{},
 		state:            NewState(),
 		logger:           NoopLogger{},
@@ -135,20 +150,17 @@ func WithLogger(l Logger) Option {
 
 // Exec is the wrapper for the request which encapsulates the circuit breaker logic
 func (cb *CircuitBreaker) Exec(fn RequestFunc) (interface{}, error) {
-	status := cb.state.Status()
-	cb.logger.Debug("current status: ", status)
-	switch status {
+	if cb.blocked {
+		return nil, ErrBlocked
+	}
+
+	switch cb.state.Status() {
 	case StatusClosed:
 		res, err := fn()
 		if err != nil {
-			cb.logger.Error("request failed with ", err)
-			if cb.counter.Fail() > cb.failureThreshold {
-				cb.logger.Info("circuitbreaker entering open state, no request can be executed for the next ", cb.state.openPeriod)
-				cb.state.Set(StatusOpen)
-			}
+			cb.handleError(err)
 			return nil, err
 		}
-		cb.logger.Debug("request succeeded")
 		cb.counter.Success()
 		return res, nil
 	case StatusHalfOpen:
@@ -156,9 +168,7 @@ func (cb *CircuitBreaker) Exec(fn RequestFunc) (interface{}, error) {
 		// if required number of success responses are received circuitbreaker goes back to the closed state
 		res, err := fn()
 		if err != nil {
-			cb.counter.Fail()
-			//forgot to update the state
-			cb.state.Set(StatusOpen)
+			cb.handleError(err)
 			return nil, err
 		}
 		if cb.counter.Success() > cb.successThreshold {
@@ -171,9 +181,32 @@ func (cb *CircuitBreaker) Exec(fn RequestFunc) (interface{}, error) {
 	return nil, nil
 }
 
-// Reset allows to reset the state to the default
-// needed for manual override
+func (cb *CircuitBreaker) handleError(err error) {
+	cb.logger.Error("request failed with ", err)
+	failed := cb.counter.Fail()
+	if failed > cb.failureThreshold || cb.state.Status() == StatusHalfOpen {
+		cb.logger.Info("entering open state for ", cb.state.openPeriod)
+		cb.state.Set(StatusOpen)
+	}
+}
+
+// Reset allows to reset the state to the defaults
 func (cb *CircuitBreaker) Reset() {
 	cb.counter.Reset()
 	cb.state.Reset()
+	cb.Unblock()
+}
+
+// Block blocks all requests
+func (cb *CircuitBreaker) Block() {
+	cb.Lock()
+	cb.blocked = true
+	cb.Unlock()
+}
+
+// Unblock returns circuitbreaker to the normal operation mode
+func (cb *CircuitBreaker) Unblock() {
+	cb.Lock()
+	cb.blocked = false
+	cb.Unlock()
 }
